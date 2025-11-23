@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QRリンクオープナー</title>
+  <link rel="preconnect" href="https://unpkg.com" crossorigin>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      line-height: 1.5;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at top, #f5f7ff, #d7e1ec);
+      color: #111;
+    }
+
+    .card {
+      width: min(480px, 92vw);
+      background: rgba(255, 255, 255, 0.9);
+      border-radius: 18px;
+      box-shadow: 0 25px 60px rgba(15, 23, 42, 0.35);
+      padding: 28px;
+      backdrop-filter: blur(12px);
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      margin: 0 0 10px;
+    }
+
+    .hint {
+      font-size: 0.92rem;
+      margin-bottom: 18px;
+      color: #334155;
+    }
+
+    #reader {
+      width: 100%;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #0f172a;
+    }
+
+    .status {
+      margin: 18px 0 4px;
+      font-weight: 600;
+      color: #0f172a;
+    }
+
+    .log {
+      font-size: 0.9rem;
+      padding: 12px;
+      border: 1px solid #cbd5f5;
+      border-radius: 10px;
+      background: #f8fbff;
+      min-height: 48px;
+      word-break: break-all;
+    }
+
+    .manual-link {
+      display: none;
+      margin-top: 12px;
+      font-size: 0.95rem;
+      text-align: center;
+      border-radius: 999px;
+      border: 1px dashed #94a3b8;
+      padding: 10px 12px;
+      color: #0f172a;
+      background: rgba(148, 163, 184, 0.1);
+      cursor: pointer;
+    }
+
+    .manual-link.show {
+      display: block;
+    }
+
+    button {
+      margin-top: 16px;
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 999px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      background: #2563eb;
+      color: #fff;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+  </style>
+  <script src="https://unpkg.com/html5-qrcode" defer></script>
+</head>
+<body>
+  <main class="card">
+    <h1>QRを読み込んで新規タブで開く</h1>
+    <p class="hint">カメラ使用を許可して、URLが含まれるQRコードをかざしてください。</p>
+    <div id="reader"></div>
+    <p class="status" id="status">カメラ準備中...</p>
+    <div class="log" id="log">まだ読み取りはありません。</div>
+    <button id="manual-link" class="manual-link" type="button">ポップアップがブロックされました。ここを押して開いてください。</button>
+    <button id="toggle">停止する</button>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const logEl = document.getElementById("log");
+    const toggleBtn = document.getElementById("toggle");
+    const manualLink = document.getElementById("manual-link");
+
+    let qrReader;
+    let running = true;
+    let pendingUrl = "";
+    let lastOpenedText = "";
+    let lastOpenedAt = 0;
+    const COOLDOWN_MS = 4000;
+
+    function isLikelyUrl(text) {
+      try {
+        const url = new URL(text.startsWith("http") ? text : `https://${text}`);
+        return url.protocol === "http:" || url.protocol === "https:";
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function setStatus(message) {
+      statusEl.textContent = message;
+    }
+
+    function showManualLink(url) {
+      manualLink.dataset.url = url;
+      pendingUrl = url;
+      try {
+        const host = new URL(url).host;
+        manualLink.textContent = `${host} を開く`;
+      } catch (_) {
+        manualLink.textContent = "リンクを開く";
+      }
+      manualLink.classList.add("show");
+    }
+
+    function hideManualLink() {
+      manualLink.classList.remove("show");
+      delete manualLink.dataset.url;
+      pendingUrl = "";
+      manualLink.textContent = "ポップアップがブロックされました。ここを押して開いてください。";
+    }
+
+    function openInNewTab(url, triggeredByUser = false) {
+      const popup = window.open("", "_blank");
+      if (!popup || popup.closed || popup === window) {
+        if (!triggeredByUser) {
+          showManualLink(url);
+          setStatus("ポップアップがブロックされました。下のボタンをタップしてください。");
+        } else {
+          alert("ブラウザにブロックされました。設定からポップアップを許可してください。");
+        }
+        return false;
+      }
+      popup.opener = null;
+      popup.location.href = url;
+      popup.focus?.();
+      hideManualLink();
+      setStatus("URLを新しいタブで開きました。続けてスキャンできます。");
+      return true;
+    }
+
+    async function startScanner() {
+      qrReader = new Html5Qrcode("reader");
+      const config = { fps: 10, qrbox: { width: 240, height: 240 } };
+
+      const onScanSuccess = (decodedText) => {
+        if (!decodedText) {
+          return;
+        }
+        const now = Date.now();
+        if (decodedText === lastOpenedText && now - lastOpenedAt < COOLDOWN_MS) {
+          return;
+        }
+        logEl.textContent = decodedText;
+        if (isLikelyUrl(decodedText)) {
+          const target = decodedText.startsWith("http") ? decodedText : `https://${decodedText}`;
+          hideManualLink();
+          const opened = openInNewTab(target);
+          if (!opened) {
+            showManualLink(target);
+          }
+          lastOpenedText = decodedText;
+          lastOpenedAt = now;
+        } else {
+          hideManualLink();
+          setStatus("URLではない文字列が検出されました。");
+        }
+      };
+
+      const onScanFailure = () => {
+        // noisy loggingなしで静かに失敗を許容
+      };
+
+      try {
+        await qrReader.start({ facingMode: "environment" }, config, onScanSuccess, onScanFailure);
+        setStatus("読み取り中。QRコードをかざしてください。");
+      } catch (err) {
+        logEl.textContent = `エラー: ${err?.message || err}`;
+        setStatus("カメラを開始できませんでした。");
+        toggleBtn.disabled = true;
+      }
+    }
+
+    toggleBtn.addEventListener("click", async () => {
+      if (!qrReader) {
+        return;
+      }
+      toggleBtn.disabled = true;
+      if (running) {
+        await qrReader.stop();
+        qrReader.clear();
+        running = false;
+        toggleBtn.textContent = "再開する";
+        setStatus("一時停止中。");
+      } else {
+        await startScanner();
+        running = true;
+        toggleBtn.textContent = "停止する";
+      }
+      toggleBtn.disabled = false;
+    });
+
+    manualLink.addEventListener("click", () => {
+      const url = manualLink.dataset.url || pendingUrl;
+      if (!url) {
+        return;
+      }
+      openInNewTab(url, true);
+    });
+
+    window.addEventListener("load", startScanner);
+  </script>
+</body>
+</html>
