@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -23,23 +24,62 @@
     }
 
     .card {
-      width: min(480px, 92vw);
+      width: min(960px, 95vw);
       background: rgba(255, 255, 255, 0.9);
       border-radius: 18px;
       box-shadow: 0 25px 60px rgba(15, 23, 42, 0.35);
       padding: 28px;
       backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header-section {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    .main-content {
+      display: flex;
+      gap: 24px;
+      align-items: flex-start;
+    }
+
+    .scanner-section {
+      flex: 1;
+      min-width: 320px;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .result-section {
+      flex: 1.5;
+      min-width: 300px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    @media (max-width: 768px) {
+      .main-content {
+        flex-direction: column;
+      }
+
+      .result-section {
+        width: 100%;
+        margin-top: 20px;
+      }
     }
 
     h1 {
       font-size: 1.4rem;
-      margin: 0 0 10px;
+      margin: 0 0 6px;
     }
 
     .hint {
       font-size: 0.92rem;
-      margin-bottom: 18px;
       color: #334155;
+      margin: 0;
     }
 
     #reader {
@@ -65,21 +105,60 @@
       word-break: break-all;
     }
 
-    .manual-link {
-      display: none;
-      margin-top: 12px;
-      font-size: 0.95rem;
-      text-align: center;
-      border-radius: 999px;
-      border: 1px dashed #94a3b8;
-      padding: 10px 12px;
-      color: #0f172a;
-      background: rgba(148, 163, 184, 0.1);
-      cursor: pointer;
+    #reader video {
+      transform: scaleX(-1);
     }
 
-    .manual-link.show {
-      display: block;
+    iframe {
+      width: 100%;
+      height: 100%;
+      min-height: 500px;
+      border: 1px solid #cbd5f5;
+      border-radius: 12px;
+      background: white;
+      flex-grow: 1;
+    }
+
+    /* Fallback button controls */
+    .result-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding: 0 4px;
+    }
+
+    .result-url {
+      font-size: 0.85rem;
+      color: #64748b;
+      max-width: 60%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .open-tab-btn {
+      text-decoration: none;
+      background: #eff6ff;
+      color: #2563eb;
+      border: 1px solid #2563eb;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      transition: all 0.2s;
+      cursor: pointer;
+      display: none;
+      /* Hidden by default */
+    }
+
+    .open-tab-btn:hover {
+      background: #2563eb;
+      color: #fff;
+    }
+
+    .open-tab-btn.show {
+      display: inline-block;
     }
 
     button {
@@ -102,29 +181,45 @@
   </style>
   <script src="https://unpkg.com/html5-qrcode" defer></script>
 </head>
+
 <body>
   <main class="card">
-    <h1>QRを読み込んで新規タブで開く</h1>
-    <p class="hint">カメラ使用を許可して、URLが含まれるQRコードをかざしてください。</p>
-    <div id="reader"></div>
-    <p class="status" id="status">カメラ準備中...</p>
-    <div class="log" id="log">まだ読み取りはありません。</div>
-    <button id="manual-link" class="manual-link" type="button">ポップアップがブロックされました。ここを押して開いてください。</button>
-    <button id="toggle">停止する</button>
+    <div class="header-section">
+      <h1>QRを読み込んで表示 (左右反転)</h1>
+      <p class="hint">カメラ使用を許可して、URLが含まれるQRコードをかざしてください。</p>
+    </div>
+
+    <div class="main-content">
+      <div class="scanner-section">
+        <div id="reader"></div>
+        <p class="status" id="status">カメラ準備中...</p>
+        <div class="log" id="log">まだ読み取りはありません。</div>
+        <button id="toggle">停止する</button>
+      </div>
+
+      <div class="result-section">
+        <div class="result-header">
+          <span class="result-url" id="result-url"></span>
+          <a id="open-new-tab" class="open-tab-btn" target="_blank" href="#">別タブで開く</a>
+        </div>
+        <iframe id="result-frame" title="Scan Result"></iframe>
+      </div>
+    </div>
   </main>
 
   <script>
     const statusEl = document.getElementById("status");
     const logEl = document.getElementById("log");
     const toggleBtn = document.getElementById("toggle");
-    const manualLink = document.getElementById("manual-link");
+    const resultFrame = document.getElementById("result-frame");
+    const openTabBtn = document.getElementById("open-new-tab");
+    const resultUrlEl = document.getElementById("result-url");
 
     let qrReader;
     let running = true;
-    let pendingUrl = "";
-    let lastOpenedText = "";
-    let lastOpenedAt = 0;
-    const COOLDOWN_MS = 4000;
+    let lastScanText = "";
+    let lastScanAt = 0;
+    const COOLDOWN_MS = 2000;
 
     function isLikelyUrl(text) {
       try {
@@ -139,79 +234,90 @@
       statusEl.textContent = message;
     }
 
-    function showManualLink(url) {
-      manualLink.dataset.url = url;
-      pendingUrl = url;
+    // HTML解析による判定ロジック (同一オリジンでのみ動作)
+    function analyzeIframeContent() {
       try {
-        const host = new URL(url).host;
-        manualLink.textContent = `${host} を開く`;
-      } catch (_) {
-        manualLink.textContent = "リンクを開く";
-      }
-      manualLink.classList.add("show");
-    }
+        // クロスオリジン(別ドメイン)の場合はここでエラーになりcatchブロックへ移動します
+        const doc = resultFrame.contentDocument || resultFrame.contentWindow.document;
 
-    function hideManualLink() {
-      manualLink.classList.remove("show");
-      delete manualLink.dataset.url;
-      pendingUrl = "";
-      manualLink.textContent = "ポップアップがブロックされました。ここを押して開いてください。";
-    }
+        if (!doc) return;
 
-    function openInNewTab(url, triggeredByUser = false) {
-      const popup = window.open("", "_blank");
-      if (!popup || popup.closed || popup === window) {
-        if (!triggeredByUser) {
-          showManualLink(url);
-          setStatus("ポップアップがブロックされました。下のボタンをタップしてください。");
+        // ここに判定ロジックを実装します
+        // 例: 特定のキーワードが含まれているか確認
+        const bodyText = doc.body.innerText;
+        console.log("iframe content:", bodyText);
+
+        // 仮の判定ロジック
+        // 本番環境に合わせて条件を書き換えてください
+        if (bodyText.includes("成功") || bodyText.includes("完了")) {
+          setStatus("✅ 処理が完了しました (HTML解析: 成功)");
+          toggleBtn.style.backgroundColor = "#10b981"; // Green
+        } else if (bodyText.includes("エラー") || bodyText.includes("失敗")) {
+          setStatus("⚠️ エラーが発生した可能性があります (HTML解析: 失敗)");
+          toggleBtn.style.backgroundColor = "#ef4444"; // Red
         } else {
-          alert("ブラウザにブロックされました。設定からポップアップを許可してください。");
+          setStatus("HTMLを取得しました。判定条件に該当しませんでした。");
         }
-        return false;
+
+      } catch (e) {
+        // クロスオリジン制限やX-Frame-Optionsによりアクセスできない場合
+        console.log("Cannot access iframe content:", e);
+        setStatus("⚠️ 結果を表示しました (外部サイトのため自動判定できません)");
       }
-      popup.opener = null;
-      popup.location.href = url;
-      popup.focus?.();
-      hideManualLink();
-      setStatus("URLを新しいタブで開きました。続けてスキャンできます。");
-      return true;
     }
+
+    resultFrame.addEventListener("load", () => {
+      // iframeの読み込み完了時に解析を試みる
+      // about:blank の場合は無視
+      if (resultFrame.src !== "about:blank") {
+        analyzeIframeContent();
+      }
+    });
 
     async function startScanner() {
       qrReader = new Html5Qrcode("reader");
       const config = { fps: 10, qrbox: { width: 240, height: 240 } };
 
       const onScanSuccess = (decodedText) => {
-        if (!decodedText) {
-          return;
-        }
+        if (!decodedText) return;
+
         const now = Date.now();
-        if (decodedText === lastOpenedText && now - lastOpenedAt < COOLDOWN_MS) {
+        if (decodedText === lastScanText && now - lastScanAt < COOLDOWN_MS) {
           return;
         }
+
+        lastScanText = decodedText;
+        lastScanAt = now;
         logEl.textContent = decodedText;
+
+        // 色をリセット
+        toggleBtn.style.backgroundColor = "";
+
         if (isLikelyUrl(decodedText)) {
           const target = decodedText.startsWith("http") ? decodedText : `https://${decodedText}`;
-          hideManualLink();
-          const opened = openInNewTab(target);
-          if (!opened) {
-            showManualLink(target);
-          }
-          lastOpenedText = decodedText;
-          lastOpenedAt = now;
+          setStatus("URLを検出しました。読み込み中...");
+
+          // Update iframe
+          resultFrame.src = target;
+
+          // Update fallback button
+          openTabBtn.href = target;
+          openTabBtn.classList.add("show");
+          resultUrlEl.textContent = target;
+
         } else {
-          hideManualLink();
-          setStatus("URLではない文字列が検出されました。");
+          setStatus("URL以外のQRコードを検出しました。");
+          resultFrame.src = "about:blank";
+          openTabBtn.classList.remove("show");
+          resultUrlEl.textContent = "";
         }
       };
 
-      const onScanFailure = () => {
-        // noisy loggingなしで静かに失敗を許容
-      };
+      const onScanFailure = () => { };
 
       try {
         await qrReader.start({ facingMode: "environment" }, config, onScanSuccess, onScanFailure);
-        setStatus("読み取り中。QRコードをかざしてください。");
+        setStatus("読み取り中... (カメラは左右反転しています)");
       } catch (err) {
         logEl.textContent = `エラー: ${err?.message || err}`;
         setStatus("カメラを開始できませんでした。");
@@ -220,9 +326,7 @@
     }
 
     toggleBtn.addEventListener("click", async () => {
-      if (!qrReader) {
-        return;
-      }
+      if (!qrReader) return;
       toggleBtn.disabled = true;
       if (running) {
         await qrReader.stop();
@@ -238,15 +342,8 @@
       toggleBtn.disabled = false;
     });
 
-    manualLink.addEventListener("click", () => {
-      const url = manualLink.dataset.url || pendingUrl;
-      if (!url) {
-        return;
-      }
-      openInNewTab(url, true);
-    });
-
     window.addEventListener("load", startScanner);
   </script>
 </body>
+
 </html>
