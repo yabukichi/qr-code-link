@@ -221,6 +221,11 @@
     let lastScanAt = 0;
     const COOLDOWN_MS = 2000;
 
+    let currentTargetUrl = "";
+    let iframeLoadTimeout = null;
+    let hasOpenedInNewTab = false;
+    const IFRAME_LOAD_TIMEOUT_MS = 5000; // 5秒以内に読み込めなければ別タブで開く
+
     function isLikelyUrl(text) {
       try {
         const url = new URL(text.startsWith("http") ? text : `https://${text}`);
@@ -233,6 +238,52 @@
     function setStatus(message) {
       statusEl.textContent = message;
     }
+
+    // 別タブで開く処理
+    function openInNewTab(url, reason = "") {
+      if (hasOpenedInNewTab || !url) return;
+      hasOpenedInNewTab = true;
+
+      window.open(url, '_blank');
+      setStatus(`⚠️ iframeで表示できなかったため、別タブで開きました${reason ? ` (${reason})` : ""}`);
+
+      // iframeは空白にリセット
+      resultFrame.src = "about:blank";
+    }
+
+    // iframeの読み込み状態をチェック
+    function checkIframeLoadStatus() {
+      if (!currentTargetUrl || hasOpenedInNewTab) return;
+
+      try {
+        // 同一オリジンの場合のみアクセス可能
+        const doc = resultFrame.contentDocument || resultFrame.contentWindow.document;
+
+        // bodyが空またはエラーページの場合
+        if (doc && doc.body) {
+          const bodyContent = doc.body.innerHTML.trim();
+          // 完全に空の場合はブロックされた可能性が高い
+          if (bodyContent === '' || doc.body.innerText.trim() === '') {
+            openInNewTab(currentTargetUrl, "コンテンツが空");
+            return;
+          }
+        }
+
+        // 正常に読み込まれた
+        analyzeIframeContent();
+      } catch (e) {
+        // クロスオリジンでアクセスできない場合
+        // 正常に読み込まれた可能性があるので、エラーとはしない
+        setStatus("⚠️ 結果を表示しました (外部サイトのため自動判定できません)");
+      }
+    }
+
+    // iframeのエラーハンドリング
+    resultFrame.addEventListener("error", () => {
+      if (currentTargetUrl && !hasOpenedInNewTab) {
+        openInNewTab(currentTargetUrl, "読み込みエラー");
+      }
+    });
 
     // HTML解析による判定ロジック (同一オリジンでのみ動作)
     function analyzeIframeContent() {
@@ -267,10 +318,19 @@
     }
 
     resultFrame.addEventListener("load", () => {
+      // タイムアウトをクリア
+      if (iframeLoadTimeout) {
+        clearTimeout(iframeLoadTimeout);
+        iframeLoadTimeout = null;
+      }
+
       // iframeの読み込み完了時に解析を試みる
       // about:blank の場合は無視
-      if (resultFrame.src !== "about:blank") {
-        analyzeIframeContent();
+      if (resultFrame.src !== "about:blank" && resultFrame.src !== "") {
+        // 少し待ってから状態をチェック（レンダリング完了を待つ）
+        setTimeout(() => {
+          checkIframeLoadStatus();
+        }, 500);
       }
     });
 
@@ -297,8 +357,25 @@
           const target = decodedText.startsWith("http") ? decodedText : `https://${decodedText}`;
           setStatus("URLを検出しました。読み込み中...");
 
+          // 前回のタイムアウトをクリア
+          if (iframeLoadTimeout) {
+            clearTimeout(iframeLoadTimeout);
+          }
+
+          // 状態をリセット
+          currentTargetUrl = target;
+          hasOpenedInNewTab = false;
+
           // Update iframe
           resultFrame.src = target;
+
+          // 読み込みタイムアウトを設定
+          // 一定時間内にloadイベントが発火しなければ別タブで開く
+          iframeLoadTimeout = setTimeout(() => {
+            if (!hasOpenedInNewTab && currentTargetUrl === target) {
+              openInNewTab(target, "タイムアウト");
+            }
+          }, IFRAME_LOAD_TIMEOUT_MS);
 
           // Update fallback button
           openTabBtn.href = target;
@@ -310,6 +387,14 @@
           resultFrame.src = "about:blank";
           openTabBtn.classList.remove("show");
           resultUrlEl.textContent = "";
+
+          // 状態をリセット
+          currentTargetUrl = "";
+          hasOpenedInNewTab = false;
+          if (iframeLoadTimeout) {
+            clearTimeout(iframeLoadTimeout);
+            iframeLoadTimeout = null;
+          }
         }
       };
 
